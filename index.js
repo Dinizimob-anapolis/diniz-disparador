@@ -14,6 +14,7 @@ const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || 'http://localhost:808
 const EVOLUTION_API_KEY  = process.env.EVOLUTION_API_KEY  || 'Diniz2026';
 const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'diniz';
 const PORT = process.env.PORT || 3000;
+const LIMITE_DIARIO = 30; // máximo de disparos por dia
 
 // Arquivo de estado (persiste respostas e datas)
 const STATE_FILE = path.join(__dirname, 'estado.json');
@@ -125,7 +126,25 @@ async function executarDisparo(imoveis) {
   let enviados = 0;
   let pulados = 0;
 
+  // Verifica quantos já foram enviados hoje
+  const hoje = new Date().toISOString().slice(0, 10);
+  const enviadosHoje = Object.values(estado).filter(r => 
+    r.ultimoEnvio && new Date(r.ultimoEnvio).toISOString().slice(0, 10) === hoje
+  ).length;
+
+  if (enviadosHoje >= LIMITE_DIARIO) {
+    console.log(`⚠️ Limite diário de ${LIMITE_DIARIO} disparos atingido. Tente amanhã.`);
+    return { enviados: 0, pulados: Object.keys(grupos).length, motivo: 'limite_diario' };
+  }
+
+  let restante = LIMITE_DIARIO - enviadosHoje;
+  console.log(`📊 Já enviados hoje: ${enviadosHoje} | Restante: ${restante}`);
+
   for (const [tel, grupo] of Object.entries(grupos)) {
+    if (restante <= 0) {
+      console.log(`⛔ Limite de ${LIMITE_DIARIO} disparos diários atingido.`);
+      break;
+    }
     const reg = estado[tel] || {};
     const agora_ts = agora.getTime();
 
@@ -176,9 +195,10 @@ async function executarDisparo(imoveis) {
         
         console.log(`✅ Enviado para ${grupo.nome} (${tel}) — ${motivo}`);
         enviados++;
+        restante--;
         
-        // Delay entre envios para não bloquear
-        await new Promise(r => setTimeout(r, 2000));
+        // Delay entre envios para não bloquear (3 segundos)
+        await new Promise(r => setTimeout(r, 3000));
       } catch (err) {
         console.error(`❌ Erro ao enviar para ${grupo.nome} (${tel}):`, err.message);
       }
