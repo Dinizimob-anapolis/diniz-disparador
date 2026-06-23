@@ -310,17 +310,32 @@ app.delete('/estado/:telefone', (req, res) => {
 // Os imóveis são carregados via variável de ambiente IMOVEIS_JSON
 // ou pelo endpoint /disparar manualmente
 
+// Disparo único hoje às 10:00 (23/06/2026)
+cron.schedule('0 10 23 6 *', async () => {
+  console.log('\n⏰ Disparo especial 10:00 —', new Date().toLocaleString('pt-BR'));
+  const imoveisPath = path.join(__dirname, 'imoveis.json');
+  if (!fs.existsSync(imoveisPath)) return;
+  try {
+    const imoveis = JSON.parse(fs.readFileSync(imoveisPath, 'utf8'));
+    await executarDisparo(imoveis);
+  } catch (err) {
+    console.error('Erro:', err.message);
+  }
+}, { timezone: 'America/Sao_Paulo' });
+
+// Disparo diário às 09:00
 cron.schedule('0 9 * * *', async () => {
   console.log('\n⏰ Disparo agendado iniciado —', new Date().toLocaleString('pt-BR'));
   
-  const imoveisJson = process.env.IMOVEIS_JSON;
-  if (!imoveisJson) {
-    console.log('⚠️ Nenhum imóvel configurado. Use a variável IMOVEIS_JSON ou o endpoint /disparar');
+  const imoveisPath = path.join(__dirname, 'imoveis.json');
+  if (!fs.existsSync(imoveisPath)) {
+    console.log('⚠️ Arquivo imoveis.json não encontrado.');
     return;
   }
 
   try {
-    const imoveis = JSON.parse(imoveisJson);
+    const imoveis = JSON.parse(fs.readFileSync(imoveisPath, 'utf8'));
+    console.log(`📋 ${imoveis.length} imóveis carregados do arquivo.`);
     await executarDisparo(imoveis);
   } catch (err) {
     console.error('Erro no disparo agendado:', err.message);
