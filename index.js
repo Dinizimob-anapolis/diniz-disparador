@@ -14,7 +14,7 @@ const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || 'http://localhost:808
 const EVOLUTION_API_KEY  = process.env.EVOLUTION_API_KEY  || 'Diniz2026';
 const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'diniz';
 const PORT = process.env.PORT || 3000;
-const LIMITE_DIARIO = 30; // máximo de disparos por dia
+const LIMITE_DIARIO = 15; // máximo de disparos por dia
 
 // Arquivo de estado (persiste respostas e datas)
 const STATE_FILE = path.join(__dirname, 'estado.json');
@@ -303,6 +303,25 @@ app.delete('/estado/:telefone', (req, res) => {
   res.json({ ok: true });
 });
 
+// Registrar resposta manualmente
+app.post('/estado/:telefone', (req, res) => {
+  const estado = carregarEstado();
+  const tel = req.params.telefone;
+  const { respondeu, ultimaResposta, dataResposta } = req.body;
+  
+  if (!estado[tel]) {
+    return res.status(404).json({ error: 'Telefone não encontrado' });
+  }
+  
+  estado[tel].respondeu = respondeu !== undefined ? respondeu : true;
+  estado[tel].ultimaResposta = ultimaResposta || '';
+  estado[tel].dataResposta = dataResposta || Date.now();
+  salvarEstado(estado);
+  
+  console.log(`✏️ Resposta manual registrada: ${tel} → ${ultimaResposta}`);
+  res.json({ ok: true });
+});
+
 // ============================================================
 // AGENDADOR — roda todo dia às 09:00
 // ============================================================
@@ -310,38 +329,97 @@ app.delete('/estado/:telefone', (req, res) => {
 // Os imóveis são carregados via variável de ambiente IMOVEIS_JSON
 // ou pelo endpoint /disparar manualmente
 
-// Disparo único hoje às 10:00 (23/06/2026)
-cron.schedule('0 10 23 6 *', async () => {
-  console.log('\n⏰ Disparo especial 10:00 —', new Date().toLocaleString('pt-BR'));
+// Disparo espaçado: 1 mensagem a cada 40 minutos das 08:00 às 18:00
+// Horários: 08:00, 08:40, 09:20, 10:00, 10:40, 11:20, 12:00, 12:40, 13:20, 14:00, 14:40, 15:20, 16:00, 16:40, 17:20
+const horariosDisparo = [
+  '0 8 * * *',    // 08:00
+  '40 8 * * *',   // 08:40
+  '20 9 * * *',   // 09:20
+  '0 10 * * *',   // 10:00
+  '40 10 * * *',  // 10:40
+  '20 11 * * *',  // 11:20
+  '0 12 * * *',   // 12:00
+  '40 12 * * *',  // 12:40
+  '20 13 * * *',  // 13:20
+  '0 14 * * *',   // 14:00
+  '40 14 * * *',  // 14:40
+  '20 15 * * *',  // 15:20
+  '0 16 * * *',   // 16:00
+  '40 16 * * *',  // 16:40
+  '20 17 * * *',  // 17:20
+];
+
+async function dispararUm() {
   const imoveisPath = path.join(__dirname, 'imoveis.json');
   if (!fs.existsSync(imoveisPath)) return;
-  try {
-    const imoveis = JSON.parse(fs.readFileSync(imoveisPath, 'utf8'));
-    await executarDisparo(imoveis);
-  } catch (err) {
-    console.error('Erro:', err.message);
-  }
-}, { timezone: 'America/Sao_Paulo' });
-
-// Disparo diário às 09:00
-cron.schedule('0 9 * * *', async () => {
-  console.log('\n⏰ Disparo agendado iniciado —', new Date().toLocaleString('pt-BR'));
-  
-  const imoveisPath = path.join(__dirname, 'imoveis.json');
-  if (!fs.existsSync(imoveisPath)) {
-    console.log('⚠️ Arquivo imoveis.json não encontrado.');
-    return;
-  }
 
   try {
     const imoveis = JSON.parse(fs.readFileSync(imoveisPath, 'utf8'));
-    console.log(`📋 ${imoveis.length} imóveis carregados do arquivo.`);
-    await executarDisparo(imoveis);
+    const estado = carregarEstado();
+    const agora = new Date();
+    const hoje = agora.toISOString().slice(0, 10);
+
+    // Verifica limite diário
+    const enviadosHoje = Object.values(estado).filter(r =>
+      r.ultimoEnvio && new Date(r.ultimoEnvio).toISOString().slice(0, 10) === hoje
+    ).length;
+
+    if (enviadosHoje >= LIMITE_DIARIO) {
+      console.log(`⚠️ Limite diário de ${LIMITE_DIARIO} já atingido.`);
+      return;
+    }
+
+    // Agrupa por proprietário
+    const grupos = agruparPorProprietario(imoveis);
+    
+    // Encontra o próximo proprietário para enviar
+    for (const [tel, grupo] of Object.entries(grupos)) {
+      const reg = estado[tel] || {};
+      const agora_ts = agora.getTime();
+      let deveEnviar = false;
+
+      if (!reg.ultimoEnvio) {
+        deveEnviar = true;
+      } else if (reg.respondeu) {
+        const dias = (agora_ts - reg.dataResposta) / (1000 * 60 * 60 * 24);
+        if (dias >= 7) deveEnviar = true;
+      } else {
+        const dias = (agora_ts - reg.ultimoEnvio) / (1000 * 60 * 60 * 24);
+        if (dias >= 1) deveEnviar = true;
+      }
+
+      if (deveEnviar) {
+        try {
+          const mensagem = montarMensagem(grupo);
+          await enviarMensagem(tel, mensagem);
+          estado[tel] = {
+            ...reg,
+            nome: grupo.nome,
+            ultimoEnvio: agora_ts,
+            respondeu: false,
+            tentativas: (reg.tentativas || 0) + 1
+          };
+          salvarEstado(estado);
+          console.log(`✅ ${agora.toLocaleTimeString('pt-BR')} — Enviado para ${grupo.nome} (${tel})`);
+          return; // Envia apenas 1 por vez
+        } catch (err) {
+          console.error(`❌ Erro ao enviar para ${grupo.nome}:`, err.message);
+          return;
+        }
+      }
+    }
+    console.log(`ℹ️ Nenhum proprietário pendente no momento.`);
   } catch (err) {
-    console.error('Erro no disparo agendado:', err.message);
+    console.error('Erro no disparo:', err.message);
   }
-}, {
-  timezone: 'America/Sao_Paulo'
+}
+
+// Agenda 1 disparo a cada 40 minutos
+horariosDisparo.forEach(horario => {
+  cron.schedule(horario, () => {
+    console.log(`\n⏰ Horário de disparo — ${new Date().toLocaleString('pt-BR')}`);
+    dispararUm();
+  }, { timezone: 'America/Sao_Paulo' });
 });
 
 // ============================================================
