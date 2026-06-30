@@ -16,8 +16,9 @@ const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'diniz';
 const PORT = process.env.PORT || 3000;
 const LIMITE_DIARIO = 15; // máximo de disparos por dia
 
-// Arquivo de estado (persiste respostas e datas)
-const STATE_FILE = path.join(__dirname, 'estado.json');
+// Arquivo de estado (persiste respostas e datas) — salvo no volume persistente
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+const STATE_FILE = path.join(DATA_DIR, 'estado.json');
 
 // ============================================================
 // UTILITÁRIOS
