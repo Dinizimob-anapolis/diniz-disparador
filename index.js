@@ -323,8 +323,54 @@ app.post('/estado/:telefone', (req, res) => {
 });
 
 // ============================================================
-// AGENDADOR — roda todo dia às 09:00
+// MONITORAMENTO DE SAÚDE
 // ============================================================
+
+let ultimoAlerta = 0;
+
+async function verificarSaude() {
+  try {
+    const resp = await axios.get(EVOLUTION_API_URL, { timeout: 10000 });
+    if (resp.status === 200) {
+      console.log(`💚 Evolution API saudável — ${new Date().toLocaleTimeString('pt-BR')}`);
+      return true;
+    }
+  } catch (err) {
+    console.error(`💔 Evolution API com problema: ${err.message}`);
+    
+    // Evita alertar mais de 1x por hora
+    const agora = Date.now();
+    if (agora - ultimoAlerta > 60 * 60 * 1000) {
+      ultimoAlerta = agora;
+      await alertarProblema(err.message);
+    }
+    return false;
+  }
+}
+
+async function alertarProblema(motivo) {
+  // Tenta enviar alerta para o número do Bruno via WhatsApp
+  const numeroAlerta = process.env.NUMERO_ALERTA; // configurar no Railway
+  if (!numeroAlerta) {
+    console.log('⚠️ NUMERO_ALERTA não configurado — não foi possível alertar.');
+    return;
+  }
+  try {
+    await enviarMensagem(numeroAlerta, `🚨 *Alerta Diniz Disparador*\n\nA Evolution API parece estar fora do ar.\n\nMotivo: ${motivo}\n\nVerifique o Railway e reinicie o serviço se necessário.`);
+    console.log('📨 Alerta enviado com sucesso.');
+  } catch (e) {
+    console.error('Não foi possível enviar alerta (API pode estar mesmo fora):', e.message);
+  }
+}
+
+// Verifica a saúde a cada 30 minutos
+cron.schedule('*/30 * * * *', verificarSaude, { timezone: 'America/Sao_Paulo' });
+
+// Rota para checar status manualmente
+app.get('/saude', async (req, res) => {
+  const ok = await verificarSaude();
+  res.json({ saudavel: ok, verificadoEm: new Date().toISOString() });
+});
 
 // Os imóveis são carregados via variável de ambiente IMOVEIS_JSON
 // ou pelo endpoint /disparar manualmente
